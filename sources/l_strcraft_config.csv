@@ -1,0 +1,9 @@
+Code,Description
+TWIN,Twin aisle
+SNGL,Single aisle
+WIDE,Wide body
+NARR,Narrow body
+RGNL,Regional jet
+TURB,Turboprop
+,Unknown
+TWIN,Twin-aisle wide

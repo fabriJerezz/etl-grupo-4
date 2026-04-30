@@ -1,0 +1,13 @@
+Code,Description
+1,Major
+2,National
+3,Regional
+4,Other
+Major,Major carriers (> $1B revenue)
+National,National carriers
+Regional,Regional carriers
+Other,Other carriers
+1,Majors
+2,Nationals
+,Unknown group
+5,

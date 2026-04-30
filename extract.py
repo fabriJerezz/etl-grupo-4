@@ -29,7 +29,6 @@ import os
 # =============================================================
 
 # Formato: mssql+pyodbc://usuario:password@servidor/base?driver=ODBC+Driver+17+for+SQL+Server
-# Si usás autenticación Windows, dejá usuario y password vacíos:
 CONNECTION_STRING = (
     "mssql+pyodbc://@localhost/dw_staging"
     "?driver=ODBC+Driver+17+for+SQL+Server"

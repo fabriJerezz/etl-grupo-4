@@ -1,0 +1,24 @@
+Code,Description
+737,Boeing 737 Classic
+738,Boeing 737-800
+739,Boeing 737-900
+73H,Boeing 737-800 High Gross
+757,Boeing 757
+767,Boeing 767
+77W,Boeing 777-300ER
+787,Boeing 787 Dreamliner
+A319,Airbus A319
+A320,Airbus A320
+A321,Airbus A321
+A321X,Airbus A321XLR
+E170,Embraer E170
+E175,Embraer E175
+E190,Embraer E190
+CRJ2,Bombardier CRJ-200
+CRJ7,Bombardier CRJ-700
+CRJ9,Bombardier CRJ-900
+ATR7,ATR 72
+BE19,Beechcraft 1900
+737,Boeing 737 (legacy code)
+DC9,
+0,Unknown aircraft

@@ -1,0 +1,15 @@
+Code,Description
+1,Under 500 Miles
+2,500-999 Miles
+3,1000-1499 Miles
+4,1500-1999 Miles
+5,2000-2499 Miles
+6,2500-2999 Miles
+7,3000-3499 Miles
+8,3500-3999 Miles
+9,4000-4499 Miles
+10,4500-4999 Miles
+11,5000 Miles and Over
+0,Distance not reported
+1,Less than 500 Miles
+,Unknown Distance Group

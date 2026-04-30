@@ -1,0 +1,12 @@
+Code,Description
+F,Scheduled Passenger/Cargo Service - Domestic
+G,Voluntary Affinity Group Charters
+L,Scheduled Passenger/Cargo Service - International
+P,Non-Scheduled Passenger/Cargo - Prorate Service
+Q,Non-Scheduled Charter Service - Passenger/Cargo
+R,Non-Scheduled - Military
+Z,Other Non-Scheduled Service
+F,Scheduled Domestic
+L,Scheduled International
+1,Scheduled
+,Unknown Service Class

@@ -1,0 +1,20 @@
+Code,Description
+1,New England
+2,Middle Atlantic
+3,South Atlantic
+4,East South Central
+5,East North Central
+6,West North Central
+7,West South Central
+8,Mountain
+9,Pacific
+10,Alaska
+11,Hawaii
+12,U.S. Territories
+91,Canada
+93,Mexico
+97,Caribbean
+98,Latin America
+99,Europe/Other International
+SE,Southeast
+0,Unknown Region
