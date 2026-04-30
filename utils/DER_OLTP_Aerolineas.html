@@ -1,0 +1,139 @@
+
+<div id="erd" style="padding: 1rem 0"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+const { svg } = await mermaid.render('erd-svg', `erDiagram
+  PAISES {
+    int PaisID PK
+    char CodigoPais
+    varchar NombrePais
+  }
+  REGIONES_WAC {
+    int WACID PK
+    smallint CodigoWAC
+    varchar DescripcionWAC
+  }
+  AEROPUERTOS {
+    int AeropuertoID PK
+    int AirportSeqID
+    int AirportID
+    int CityMarketID
+    char CodigoIATA
+    varchar NombreAeropuerto
+    varchar Ciudad
+    int PaisID FK
+    int WACID FK
+    date FechaDesde
+    date FechaHasta
+  }
+  GRUPOS_TRANSPORTISTA {
+    int GrupoTransportistaID PK
+    varchar CodigoGrupo
+    varchar NombreGrupo
+  }
+  TRANSPORTISTAS {
+    int TransportistaID PK
+    int AirlineID
+    varchar UniqueCarrierCode
+    varchar UniqueCarrierName
+    int GrupoTransportistaID FK
+    bit Activo
+    date FechaDesde
+    date FechaHasta
+  }
+  HISTORIAL_TRANSPORTISTA {
+    int HistorialID PK
+    int TransportistaID FK
+    varchar CodigoAnterior
+    varchar CodigoNuevo
+    date FechaCambio
+  }
+  TIPOS_AERONAVE {
+    int TipoAeronaveID PK
+    varchar CodigoGrupo
+    varchar CodigoTipo
+    varchar Configuracion
+    varchar Descripcion
+  }
+  CLASES_SERVICIO {
+    int ClaseServicioID PK
+    char CodigoClase
+    varchar DescripcionClase
+  }
+  GRUPOS_DISTANCIA {
+    int GrupoDistanciaID PK
+    smallint CodigoGrupo
+    varchar DescripcionGrupo
+  }
+  SEGMENTOS_VUELO {
+    bigint SegmentoID PK
+    smallint Anio
+    tinyint Trimestre
+    tinyint Mes
+    int TransportistaID FK
+    int OrigenAeropuertoID FK
+    int DestinoAeropuertoID FK
+    int TipoAeronaveID FK
+    int ClaseServicioID FK
+    int GrupoDistanciaID FK
+    int VuelosProgramados
+    int VuelosRealizados
+    int AsientosDisponibles
+    int PasajerosTransportados
+    decimal CargaLibras
+    decimal CorreoLibras
+    decimal DistanciaMillas
+    int TiempoVuelo
+  }
+
+  PAISES ||--o{ AEROPUERTOS : "PaisID"
+  REGIONES_WAC ||--o{ AEROPUERTOS : "WACID"
+  GRUPOS_TRANSPORTISTA ||--o{ TRANSPORTISTAS : "GrupoTransportistaID"
+  TRANSPORTISTAS ||--o{ HISTORIAL_TRANSPORTISTA : "TransportistaID"
+  TRANSPORTISTAS ||--o{ SEGMENTOS_VUELO : "TransportistaID"
+  AEROPUERTOS ||--o{ SEGMENTOS_VUELO : "origen"
+  AEROPUERTOS ||--o{ SEGMENTOS_VUELO : "destino"
+  TIPOS_AERONAVE ||--o{ SEGMENTOS_VUELO : "TipoAeronaveID"
+  CLASES_SERVICIO ||--o{ SEGMENTOS_VUELO : "ClaseServicioID"
+  GRUPOS_DISTANCIA ||--o{ SEGMENTOS_VUELO : "GrupoDistanciaID"
+`);
+document.getElementById('erd').innerHTML = svg;
+
+document.querySelectorAll('#erd svg .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+
+document.querySelectorAll('#erd svg .row-rect-odd path, #erd svg .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>
