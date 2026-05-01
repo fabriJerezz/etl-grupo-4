@@ -4,39 +4,39 @@
 Carga los CSVs fuente en las tablas de staging de SQL Server.
 
 REQUISITOS:
-    pip install pandas sqlalchemy pyodbc
+    pip install pandas sqlalchemy pyodbc python-dotenv
 
 CONFIGURACIÓN:
-    Modificar la variable CONNECTION_STRING con los datos de tu servidor.
+    Crear un archivo .env con DB_CONNECTION_STRING.
 
 USO:
-    python 02_cargar_staging.py
+    python extract.py
 
 NOTA:
-    - El directorio CSV_DIR debe apuntar a la carpeta donde descomprimiste
-      el ZIP con los archivos fuente (SourcesAerolineas).
-    - El script es idempotente: trunca las tablas antes de cargar,
-      así podés re-ejecutarlo sin generar duplicados.
+    - El directorio CSV_DIR apunta a la carpeta sources del proyecto.
+    - El script es idempotente: trunca las tablas antes de cargar, así podés re-ejecutarlo sin generar duplicados.
+    - El archivo .env debe estar en la carpeta raiz del proyecto.
 """
 
-import pandas as pd
-from sqlalchemy import create_engine, text
-import time
 import os
+import time
+
+import pandas as pd
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 # =============================================================
 # CONFIGURACIÓN - MODIFICAR SEGÚN TU ENTORNO
 # =============================================================
 
 # Formato: mssql+pyodbc://usuario:password@servidor/base?driver=ODBC+Driver+17+for+SQL+Server
-CONNECTION_STRING = (
-    "mssql+pyodbc://@localhost/dw_staging"
-    "?driver=ODBC+Driver+17+for+SQL+Server"
-    "&trusted_connection=yes"
-)
+ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(ENV_PATH)
 
-# Ruta a la carpeta con los CSVs extraídos
-CSV_DIR = r"C:\SourcesAerolineas"  # <-- CAMBIAR a tu ruta local
+CONNECTION_STRING = os.getenv("DB_CONNECTION_STRING")
+
+# Ruta a la carpeta con los CSVs dentro del proyecto
+CSV_DIR = os.path.join(os.path.dirname(__file__), "sources")
 
 # =============================================================
 # MAPEO: archivo CSV -> tabla staging
@@ -93,14 +93,13 @@ def cargar_t100(engine, csv_dir):
     # Truncar tabla destino
     truncar_tabla(engine, tabla)
 
-    # Cargar en bloques de 5000 filas (más eficiente para tablas grandes)
+    # Cargar en bloques para evitar el limite de parametros en SQL Server
     df.to_sql(
         name=tabla,
         con=engine,
         if_exists="append",
         index=False,
-        chunksize=5000,
-        method="multi"
+        chunksize=1000
     )
 
     elapsed = time.time() - inicio
@@ -181,11 +180,16 @@ if __name__ == "__main__":
 
     # Verificar que el directorio de CSVs existe
     if not os.path.isdir(CSV_DIR):
-        print(f"\n❌ ERROR: No se encontró el directorio: {CSV_DIR}")
-        print(f"   Modificá la variable CSV_DIR en el script.")
+        print(f"\nX ERROR: No se encontró el directorio: {CSV_DIR}")
+        print(f"   Modifica la variable CSV_DIR en el script.")
         exit(1)
 
     # Crear conexión
+    if not CONNECTION_STRING:
+        print("\nERROR: No se encontró DB_CONNECTION_STRING en el .env")
+        print("   Crea el archivo .env y agrega la variable de conexión.")
+        exit(1)
+
     print(f"\nConectando a SQL Server...")
     engine = create_engine(CONNECTION_STRING, fast_executemany=True)
 
@@ -196,7 +200,7 @@ if __name__ == "__main__":
         print(f"  ✓ Conexión exitosa")
     except Exception as e:
         print(f"\nX ERROR de conexión: {e}")
-        print(f"   Verificá CONNECTION_STRING en el script.")
+        print("   Verifica DB_CONNECTION_STRING en el .env.")
         exit(1)
 
     inicio_total = time.time()

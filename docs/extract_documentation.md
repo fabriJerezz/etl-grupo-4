@@ -10,22 +10,29 @@ Antes de cada carga, trunca la tabla destino para mantener idempotencia.
 Requisitos
 ----------
 - Python 3.x
-- Paquetes: pandas, sqlalchemy, pyodbc
+- Paquetes: pandas, sqlalchemy, pyodbc, python-dotenv
+- Driver ODBC para SQL Server (ODBC Driver 17 o 18)
 
 Instalacion rapida de dependencias:
-		pip install pandas sqlalchemy pyodbc
+		pip install -r requirements.txt
 
 Configuracion
 -------------
-1) CONNECTION_STRING
+1) DB_CONNECTION_STRING en archivo .env
+	 Crear un archivo .env en la raiz del proyecto (o copiar .env.example).
 	 Cadena de conexion a SQL Server usando SQLAlchemy + pyodbc.
 	 Ejemplo (autenticacion Windows):
-	 mssql+pyodbc://@localhost/dw_staging?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes
+	 DB_CONNECTION_STRING=mssql+pyodbc://@localhost/dw_staging_raw?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes
+
+	 Ejemplo (autenticacion SQL):
+	 DB_CONNECTION_STRING=mssql+pyodbc://usuario:password@localhost/dw_staging_raw?driver=ODBC+Driver+17+for+SQL+Server
+
+	 Nota: para una instancia con nombre usar localhost%5CINSTANCIA o un puerto fijo localhost,PUERTO.
 
 2) CSV_DIR
-	 Ruta local donde estan los CSVs extraidos del ZIP fuente.
-	 Ejemplo:
-	 C:\SourcesAerolineas
+	 Ruta a la carpeta sources dentro del proyecto.
+	 Por defecto: <raiz_del_proyecto>\sources
+	 Si cambias la ubicacion, actualiza la variable en el script.
 
 Entradas
 --------
@@ -42,7 +49,7 @@ Flujo general
 1) Verifica que exista CSV_DIR.
 2) Crea engine de SQLAlchemy y prueba conexion.
 3) Carga lookups: trunca tabla y luego inserta filas.
-4) Carga T100: trunca y carga por bloques de 5000 filas.
+4) Carga T100: trunca y carga por bloques de 1000 filas.
 5) Verifica conteos de filas por tabla (stg_%).
 
 Funciones principales
@@ -93,11 +100,11 @@ Desde la carpeta del proyecto:
 Notas de uso
 ------------
 - Idempotencia: el script trunca las tablas antes de cada carga.
-- Rendimiento: T100 se carga en bloques (chunksize=5000).
+- Rendimiento: T100 se carga en bloques (chunksize=1000).
 - Tipos: los lookups se leen como texto para evitar problemas de tipo.
 
 Errores comunes
 --------------
 - Directorio CSV inexistente: revisar CSV_DIR.
-- Error de conexion: revisar CONNECTION_STRING, driver ODBC y credenciales.
+- Error de conexion: revisar DB_CONNECTION_STRING en el .env, driver ODBC y credenciales.
 - CSV faltante: el script lo reporta y continua con el resto.
