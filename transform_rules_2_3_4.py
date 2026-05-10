@@ -40,15 +40,10 @@ load_dotenv(ENV_PATH)
 
 CONNECTION_STRING = os.getenv("DB_CONNECTION_STRING")
 
-# Campos de stg_t100 que no deben estar vacíos
-CAMPOS_OBLIGATORIOS = [
-    "UniqueCarrierName",
-    "CarrierName",
-    "AircraftType",
-    "OriginCityName",
-    "DestCityName",
-    "Class",
-]
+# Campos obligatorios tratados en R04.
+# OriginCityName y DestCityName hoy no tienen nulos pero se incluyen
+# para que el resumen los contemple si aparecen en el futuro.
+CAMPOS_CON_NULOS = ["CarrierName", "AircraftType", "Class", "OriginCityName", "DestCityName"]
 
 # Sufijos corporativos a quitar del nombre del carrier (R02)
 SUFIJOS_CORPORATIVOS = [
@@ -212,50 +207,127 @@ def aplicar_r03(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =============================================================
-# R04 — CAMPOS OBLIGATORIOS VACÍOS  →  NULL
+# R04 — CAMPOS OBLIGATORIOS NULOS  →  IMPUTACIÓN O NULL
 # =============================================================
 
-def _es_vacio(valor) -> bool:
-    """True si el valor es None, NaN o string en blanco."""
-    if valor is None:
-        return True
-    if isinstance(valor, float) and pd.isna(valor):
-        return True
-    if isinstance(valor, str) and valor.strip() == "":
-        return True
-    return False
-
-
-def aplicar_r04(df: pd.DataFrame) -> pd.DataFrame:
+def _imputar_carrier_name(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """
-    R04: Detecta strings vacíos en campos obligatorios y los convierte a NULL.
+    CarrierName nulo → valor del campo Carrier del mismo registro.
 
-    Problema: ~700 registros tienen strings vacíos ("") en campos que deberían
-              tener valor. Un string vacío no es NULL: pasa filtros IS NOT NULL
-              y genera dimensiones fantasma en la BD destino.
-    Solución: reemplazar strings vacíos/en blanco por NaN en CAMPOS_OBLIGATORIOS.
-
-    Columnas afectadas: CarrierName, AircraftType, OriginCityName, DestCityName, Class
+    Carrier siempre tiene valor y es el código IATA limpio (sin sufijo numérico),
+    que es exactamente lo que CarrierName debería contener.
     """
-    print("  [R04] Detectando campos obligatorios vacíos...")
+    mascara = df["CarrierName"].isna()
+    cantidad = int(mascara.sum())
+    df.loc[mascara, "CarrierName"] = df.loc[mascara, "Carrier"]
+    print(f"         'CarrierName': {cantidad:,} nulos → imputado desde Carrier")
+    return df, cantidad
+
+
+def _imputar_class(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Class nulo → clase inferida desde UniqueCarrier.
+
+    Análisis del dataset confirma que cada UniqueCarrier usa siempre
+    la misma clase (F o L), sin excepciones en los 98.530 registros válidos.
+    Se construye el mapa dinámicamente desde las filas no nulas del propio DataFrame.
+    """
+    mapa_carrier_class = (
+        df[df["Class"].notna()]
+        .groupby("UniqueCarrier")["Class"]
+        .agg(lambda s: s.mode()[0])  # valor más frecuente por carrier (siempre único)
+        .to_dict()
+    )
+
+    mascara = df["Class"].isna()
+    cantidad = int(mascara.sum())
+    df.loc[mascara, "Class"] = df.loc[mascara, "UniqueCarrier"].map(mapa_carrier_class)
+    print(f"         'Class':       {cantidad:,} nulos → imputado desde UniqueCarrier")
+    return df, cantidad
+
+
+def _imputar_city_name(
+    df: pd.DataFrame,
+    col_city: str,
+    col_iata: str,
+    engine,
+) -> tuple[pd.DataFrame, int]:
+    """
+    CityName nulo → ciudad inferida en dos pasos:
+
+    Paso 1: cruzar el código IATA (Origin/Dest) con stg_airports en dw_staging_raw.
+            Description tiene formato "Ciudad, Estado: Nombre Aeropuerto";
+            se extrae la parte antes del ":" como nombre de ciudad.
+            Cobertura: ~63% de las filas, certeza 100%.
+
+    Paso 2: para los IATA no cubiertos por stg_airports, construir un
+            diccionario desde las filas no-nulas del propio DataFrame
+            (relación IATA → CityName es 1-a-1 perfecta en el dataset).
+            Cubre el 100% restante.
+
+    No se usa CityMarketID: 13 de 138 CMIDs agrupan hasta 5 ciudades
+    distintas y generarían imputaciones incorrectas.
+    No se usa stg_airport_ids: tiene errores de datos documentados.
+    """
+    mascara = df[col_city].isna()
+    cantidad = int(mascara.sum())
+    if cantidad == 0:
+        return df, 0
+
+    # Paso 1: lookup desde stg_airports en dw_staging_raw
+    lk = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_airports "
+        "WHERE Code IS NOT NULL AND Description IS NOT NULL",
+        engine,
+    )
+    lk["ciudad"] = lk["Description"].str.split(":").str[0].str.strip()
+    mapa_lookup = lk.set_index("Code")["ciudad"].to_dict()
+
+    # Paso 2: diccionario construido desde filas no-nulas del propio df
+    mapa_dataset = (
+        df[df[col_city].notna()]
+        .groupby(col_iata)[col_city]
+        .agg(lambda s: s.mode()[0])
+        .to_dict()
+    )
+
+    # Aplicar: lookup tiene prioridad sobre el fallback del dataset
+    mapa_final = {**mapa_dataset, **mapa_lookup}
+    df.loc[mascara, col_city] = df.loc[mascara, col_iata].map(mapa_final)
+
+    resueltos = cantidad - int(df[col_city].isna().sum())
+    print(f"         '{col_city}': {cantidad:,} nulos → {resueltos:,} imputados desde stg_airports")
+    return df, resueltos
+
+
+def aplicar_r04(df: pd.DataFrame, engine) -> pd.DataFrame:
+    """
+    R04: Trata los campos obligatorios con valores NULL.
+
+    Campos y estrategia:
+      - CarrierName    (101 nulos): imputar desde Carrier (código IATA limpio).
+      - Class          ( 92 nulos): imputar desde UniqueCarrier (clase única por carrier).
+      - AircraftType   (108 nulos): mantener como NULL (JET+TWIN mapea a 15 tipos distintos).
+      - OriginCityName (  0 nulos): preparado para imputar desde Origin + stg_airports.
+      - DestCityName   (  0 nulos): preparado para imputar desde Dest   + stg_airports.
+
+    Todos los lookups se leen desde dw_staging_raw (SQL Server), nunca desde CSV.
+    """
+    print("  [R04] Tratando campos obligatorios con NULL...")
 
     df = df.copy()
-    total_reemplazados = 0
 
-    for campo in CAMPOS_OBLIGATORIOS:
-        if campo not in df.columns:
-            print(f"         ⚠ Campo '{campo}' no encontrado, se omite.")
-            continue
+    df, n_carrier = _imputar_carrier_name(df)
+    df, n_class   = _imputar_class(df)
 
-        mascara = df[campo].apply(_es_vacio)
-        cantidad = mascara.sum()
+    n_aircraft = int(df["AircraftType"].isna().sum())
+    print(f"         'AircraftType': {n_aircraft:,} nulos → se mantienen como NULL (no imputables)")
 
-        if cantidad > 0:
-            df.loc[mascara, campo] = None
-            print(f"         '{campo}': {cantidad:,} vacíos → NULL")
-            total_reemplazados += cantidad
+    df, n_origin = _imputar_city_name(df, "OriginCityName", "Origin", engine)
+    df, n_dest   = _imputar_city_name(df, "DestCityName",   "Dest",   engine)
 
-    print(f"         Total reemplazados: {total_reemplazados:,}")
+    total_imputados = n_carrier + n_class + n_origin + n_dest
+    print(f"         Total imputados: {total_imputados:,}  |  Irresolubles: {n_aircraft:,}")
     return df
 
 
@@ -282,7 +354,7 @@ def aplicar_reglas(engine) -> tuple[pd.DataFrame, pd.DataFrame]:
     print()
     df = aplicar_r02(df)
     df = aplicar_r03(df)
-    df = aplicar_r04(df)
+    df = aplicar_r04(df, engine)
 
     resumen = pd.DataFrame([
         {
@@ -297,10 +369,9 @@ def aplicar_reglas(engine) -> tuple[pd.DataFrame, pd.DataFrame]:
         },
         {
             "regla": "R04",
-            "descripcion": "Campos obligatorios vacíos → NULL",
+            "descripcion": "Campos con NULL: imputados o mantenidos",
             "filas_afectadas": int(
-                df[[c for c in CAMPOS_OBLIGATORIOS if c in df.columns]]
-                .isna().any(axis=1).sum()
+                df[CAMPOS_CON_NULOS].isna().any(axis=1).sum()
             ),
         },
     ])
