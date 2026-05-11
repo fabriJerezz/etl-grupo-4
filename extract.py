@@ -112,7 +112,7 @@ def cargar_lookups(engine, csv_dir):
     total_filas = 0
 
     print(f"\n{'='*60}")
-    print(f"Cargando lookups")
+    print("Cargando lookups")
     print(f"{'='*60}")
 
     for csv_file, tabla in LOOKUP_MAP.items():
@@ -145,7 +145,7 @@ def cargar_lookups(engine, csv_dir):
 def verificar_carga(engine):
     """Muestra el conteo de filas de cada tabla staging."""
     print(f"\n{'='*60}")
-    print(f"VERIFICACIÓN - Conteo de filas por tabla")
+    print("VERIFICACIÓN - Conteo de filas por tabla")
     print(f"{'='*60}")
 
     query = """
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     # Verificar que el directorio de CSVs existe
     if not os.path.isdir(CSV_DIR):
         print(f"\nX ERROR: No se encontró el directorio: {CSV_DIR}")
-        print(f"   Modifica la variable CSV_DIR en el script.")
+        print("   Modifica la variable CSV_DIR en el script.")
         exit(1)
 
     # Crear conexión
@@ -190,14 +190,14 @@ if __name__ == "__main__":
         print("   Crea el archivo .env y agrega la variable de conexión.")
         exit(1)
 
-    print(f"\nConectando a SQL Server...")
+    print("\nConectando a SQL Server...")
     engine = create_engine(CONNECTION_STRING, fast_executemany=True)
 
     # Verificar conexión
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        print(f"  ✓ Conexión exitosa")
+        print("  ✓ Conexión exitosa")
     except Exception as e:
         print(f"\nX ERROR de conexión: {e}")
         print("   Verifica DB_CONNECTION_STRING en el .env.")
@@ -216,7 +216,7 @@ if __name__ == "__main__":
 
     elapsed_total = time.time() - inicio_total
     print(f"\n{'='*60}")
-    print(f"CARGA COMPLETADA")
+    print("CARGA COMPLETADA")
     print(f"  Lookups: {filas_lookups:,} filas")
     print(f"  T100:    {filas_t100:,} filas")
     print(f"  Tiempo:  {elapsed_total:.1f}s")
