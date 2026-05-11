@@ -180,7 +180,7 @@ if __name__ == "__main__":
 
     # Verificar que el directorio de CSVs existe
     if not os.path.isdir(CSV_DIR):
-        print("\nX ERROR: No se encontró el directorio: {CSV_DIR}")
+        print(f"\nX ERROR: No se encontró el directorio: {CSV_DIR}")
         print("   Modifica la variable CSV_DIR en el script.")
         exit(1)
 
