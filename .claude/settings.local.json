@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/fabri/Library/CloudStorage/OneDrive-FacultadRegionalResistencia/sexto/analisis-de-datos-empresariales/etl-grupo-4/.venv/bin/python 2>/dev/null && echo \"found\" || echo \"no .venv\")"
+    ]
+  }
+}
