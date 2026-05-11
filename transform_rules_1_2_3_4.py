@@ -1,11 +1,12 @@
 """
-transform_rules_2_3_4.py
+transform_rules_1_2_3_4.py
 ------------
 Fase de transformación del ETL. Lee las tablas de staging desde SQL Server,
-aplica las reglas de calidad asignadas (2, 3 y 4) y retorna DataFrames limpios listos
+aplica las reglas de calidad asignadas (1, 2, 3 y 4) y retorna DataFrames limpios listos
 para la fase de carga (load.py).
 
 REGLAS IMPLEMENTADAS:
+    R01 - Sufijo numérico en UniqueCarrier / Carrier  →  eliminación del sufijo
     R02 - Normalización de UniqueCarrierName
     R03 - AirlineID = 0 o NULL  →  "Desconocido"
     R04 - Campos obligatorios vacíos  →  detección y reemplazo con NULL
@@ -21,7 +22,7 @@ USO (como módulo):
     df_t100, df_resumen = aplicar_reglas(engine)
 
 USO (directo):
-    python transform_rules_2_3_4.py
+    python transform_rules_1_2_3_4.py
 """
 
 import os
@@ -130,6 +131,41 @@ NOMBRES_CANONICOS = {
     # COMMUT AIR  (CommutAir escrito junto)
     "COMMUTAIR":              "COMMUT AIR",
 }
+
+# =============================================================
+# R01 — SUFIJO NUMÉRICO EN UniqueCarrier / Carrier
+# =============================================================
+
+PATRON_SUFIJO_IATA = re.compile(r'\(\d+\)$')
+
+
+def aplicar_r01(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    R01: Elimina el sufijo numérico del código IATA en UniqueCarrier y Carrier.
+
+    Problema: el BTS agrega el sufijo (n) al código IATA original cuando ese código
+      fue reutilizado por otro carrier tras una fusión o cese (ej: AA(1), US(1), CO(1)).
+      Esto fragmenta el agrupamiento: las 56 filas con sufijo quedan como carriers
+      distintos al resto de American Airlines, US Airways y Continental.
+    Solución: quitar el sufijo con regex → AA(1) → AA, US(1) → US, CO(1) → CO.
+      Los AirlineIDs incorrectos que persisten en esas filas son resueltos por R09.
+
+    Columnas afectadas: UniqueCarrier, Carrier
+    """
+    print("  [R01] Eliminando sufijos numéricos en códigos IATA...")
+
+    df = df.copy()
+    mascara = df["UniqueCarrier"].str.contains(PATRON_SUFIJO_IATA, na=False)
+    cantidad = int(mascara.sum())
+    carriers_afectados = sorted(df.loc[mascara, "UniqueCarrier"].unique())
+
+    df["UniqueCarrier"] = df["UniqueCarrier"].str.replace(PATRON_SUFIJO_IATA, "", regex=True)
+    df["Carrier"]       = df["Carrier"].str.replace(PATRON_SUFIJO_IATA, "", regex=True)
+
+    print(f"         Registros corregidos: {cantidad:,}  "
+          f"(códigos: {', '.join(carriers_afectados)})")
+    return df, cantidad
+
 
 # =============================================================
 # R02 — NORMALIZACIÓN DE UniqueCarrierName
@@ -344,7 +380,7 @@ def aplicar_reglas(engine) -> tuple[pd.DataFrame, pd.DataFrame]:
     útil para logging en load.py.
     """
     print("\n" + "=" * 60)
-    print("TRANSFORM — Reglas R02, R03, R04")
+    print("TRANSFORM — Reglas R01, R02, R03, R04")
     print("=" * 60)
 
     print("\nLeyendo stg_t100 desde staging...")
@@ -352,11 +388,17 @@ def aplicar_reglas(engine) -> tuple[pd.DataFrame, pd.DataFrame]:
     print(f"  Filas leídas: {len(df):,}")
 
     print()
+    df, n_r01 = aplicar_r01(df)
     df = aplicar_r02(df)
     df = aplicar_r03(df)
     df = aplicar_r04(df, engine)
 
     resumen = pd.DataFrame([
+        {
+            "regla": "R01",
+            "descripcion": "Sufijo numérico en código IATA eliminado",
+            "filas_afectadas": n_r01,
+        },
         {
             "regla": "R02",
             "descripcion": "Normalización UniqueCarrierName",
