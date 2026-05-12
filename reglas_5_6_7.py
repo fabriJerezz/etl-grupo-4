@@ -67,7 +67,7 @@ def aplicar_regla_6_pasajeros_asientos(df_datos):
 
     Problema 6: Passengers > Seats (~560 registros en el dataset de práctica).
     Criterio ETL: se asume que el exceso puede deberse a cambio de asiento, revendedores,
-    etc., y se cap a capacidad declarada. Seats = 0 no se toca aquí (otra regla / módulo).
+    etc., y se corrige a capacidad declarada. Seats = 0 no se toca aquí (regla 14).
     """
     print("  > Aplicando Regla 6 (Passengers > Seats → Passengers := Seats)")
     df_clean = df_datos.copy()
@@ -83,21 +83,28 @@ def aplicar_regla_6_pasajeros_asientos(df_datos):
     )
     n = int(mask.sum())
     if n:
+        first_idx = mask.idxmax()
+        row = df_clean.loc[first_idx]
+        print(
+            f"    - Primer caso encontrado: {row[COL_ORIGIN]}→{row[COL_DEST]} | "
+            f"Passengers={int(row['Passengers'])} > Seats={int(row['Seats'])} "
+            f"→ Passengers := {int(row['Seats'])}"
+        )
         df_clean.loc[mask, "Passengers"] = seats[mask]
-    print(f"    - {n} registros ajustados (Passengers := Seats).")
+    print(f"    - {n} registros corregidos (Passengers := Seats).")
     return df_clean
 
 
 def aplicar_regla_7_distancia(df_datos):
     """
-    Si Distance es nula o <= 0, imputa con la distancia de otro registro del mismo
+    Si Distance es nula o <= 0, se obtiene la distancia de otro registro del mismo
     par (Origin, Dest) que tenga Distance > 0 (referencia por OD en el mismo lote).
 
-    Problema 7: Distance = 0 o negativa (~300 registros en el dataset de práctica).
-    Si no hay ningún pariente con distancia válida para ese OD, la fila se descarta.
+    Problema 7: Distance = 0 o negativa (~300 registros en el dataset).
+    Si no hay ningun regsitro con distancia válida para ese OD, la fila se descarta.
     """
     print(
-        "  > Aplicando Regla 7 (Distance inválida → imputar por mismo Origin–Dest)..."
+        "  > Aplicando Regla 7 (Distance inválida → recuperar por mismo Origin–Dest)..."
     )
     df_clean = df_datos.copy()
 
@@ -110,6 +117,14 @@ def aplicar_regla_7_distancia(df_datos):
     bad = distance.isna() | (distance <= 0)
     good = distance.notna() & (distance > 0)
 
+    if bad.any():
+        first_bad_idx = bad.idxmax()
+        row_bad = df_clean.loc[first_bad_idx]
+        print(
+            f"    - Primer caso encontrado: {row_bad[COL_ORIGIN]}→{row_bad[COL_DEST]} | "
+            f"Distance={row_bad['Distance']}"
+        )
+
     ref = (
         df_clean.loc[good, [COL_ORIGIN, COL_DEST]]
         .assign(_dist_ref=distance[good])
@@ -121,6 +136,15 @@ def aplicar_regla_7_distancia(df_datos):
     can_fill = bad & merged["_dist_ref"].notna()
     n_fill = int(can_fill.sum())
     if n_fill:
+        first_fill_pos = can_fill[can_fill].index[0]
+        orig_dist = df_clean.loc[first_fill_pos, "Distance"]
+        new_dist = merged.loc[first_fill_pos, "_dist_ref"]
+        print(
+            f"      → Corregido a Distance={new_dist:.0f} "
+            f"(desde otro registro con el mismo par "
+            f"{merged.loc[first_fill_pos, COL_ORIGIN]}–{merged.loc[first_fill_pos, COL_DEST]}, "
+            f"Distance original={orig_dist})"
+        )
         merged.loc[can_fill, "Distance"] = merged.loc[can_fill, "_dist_ref"]
     merged = merged.drop(columns=["_dist_ref"])
 
@@ -129,7 +153,7 @@ def aplicar_regla_7_distancia(df_datos):
     n_drop = int(still_bad.sum())
     df_out = merged.loc[~still_bad].copy()
 
-    print(f"    - {n_fill} registros con Distance imputada (mismo {COL_ORIGIN}–{COL_DEST}).")
+    print(f"    - {n_fill} registros corregidos (Distance obtenida por mismo {COL_ORIGIN}–{COL_DEST}).")
     print(f"    - {n_drop} registros eliminados (sin referencia OD con distancia > 0).")
     return df_out
 
