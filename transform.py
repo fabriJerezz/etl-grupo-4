@@ -758,22 +758,21 @@ def ejecutar_pipeline_transformacion(df_crudo, engine):
     
     df = aplicar_regla_14_flag_seats(df)
     df = aplicar_regla_16_carriers_expirados(df, engine)
+    df = aplicar_regla_10_duplicados(df)
 
 # --- PREPARACIÓN FINAL Y TIPADO PARA EL DATA WAREHOUSE ---
     print("\n  > Aplicando Tipos de Datos (Casteo) y calculando métricas finales...")
         
-    # 1. OcupPasajeros: (Pasajeros / Asientos) controlando división por cero
+# 2. OcupPasajeros: (Passengers / Seats)
     df['OcupPasajeros'] = np.where(df['Seats'] > 0, df['Passengers'] / df['Seats'], 0)
-    df['OcupPasajeros'] = df['OcupPasajeros'].astype(float).round(4)
+    df['OcupPasajeros'] = df['OcupPasajeros'].fillna(0).round(4)
     
-    # 2. OcupCarga: (Carga / Capacidad) controlando división por cero
-    df['OcupCarga'] = np.where(df['Capacidad'] > 0, df['Carga'] / df['Capacidad'], 0)
-    df['OcupCarga'] = df['OcupCarga'].astype(float).round(4)
+    # 3. OcupCarga: (Freight / Payload)
+    df['OcupCarga'] = np.where(df['Payload'] > 0, df['Freight'] / df['Payload'], 0)
+    df['OcupCarga'] = df['OcupCarga'].fillna(0).round(4)
 
-    # 3. DemoraPista: (RampTime - AirTime) en minutos
-    df['DemoraPista'] = df['RampTime'] - df['AirTime']
-    # Se castea a float para que SQL Server tolere correctamente los NaN en caso de tiempos nulos
-    df['DemoraPista'] = df['DemoraPista'].astype(float)
+    # 4. DemoraPista: (RampTime - AirTime)
+    df['DemoraPista'] = (df['RampTime'] - df['AirTime']).fillna(0)
 
     # 4. Estacion: Calculada según el mes (Hemisferio Norte - USA) --> Para dimension Tiempo
     # 1: Invierno, 2: Primavera, 3: Verano, 4: Otoño
