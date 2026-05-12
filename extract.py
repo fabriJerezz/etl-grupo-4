@@ -80,9 +80,9 @@ def cargar_t100(engine, csv_dir):
     archivo = os.path.join(csv_dir, "t100_carriers_2023.csv")
     tabla = "stg_t100"
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Cargando {archivo} -> {tabla}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     inicio = time.time()
 
@@ -144,12 +144,12 @@ def cargar_lookups(engine, csv_dir):
 
 def verificar_carga(engine):
     """Muestra el conteo de filas de cada tabla staging."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("VERIFICACIÓN - Conteo de filas por tabla")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     query = """
-        SELECT t.name AS tabla, 
+        SELECT t.name AS tabla,
                SUM(p.rows) AS filas
         FROM sys.tables t
         JOIN sys.partitions p ON t.object_id = p.object_id
@@ -165,7 +165,7 @@ def verificar_carga(engine):
         for row in result:
             print(f"  {row[0]:40s} {row[1]:>10,} filas")
             total += row[1]
-        print(f"  {'─'*52}")
+        print(f"  {'─' * 52}")
         print(f"  {'TOTAL':40s} {total:>10,} filas")
 
 
@@ -215,9 +215,10 @@ if __name__ == "__main__":
     verificar_carga(engine)
 
     elapsed_total = time.time() - inicio_total
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("CARGA COMPLETADA")
     print(f"  Lookups: {filas_lookups:,} filas")
     print(f"  T100:    {filas_t100:,} filas")
     print(f"  Tiempo:  {elapsed_total:.1f}s")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
+j

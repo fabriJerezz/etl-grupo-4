@@ -67,7 +67,7 @@ def aplicar_regla_6_pasajeros_asientos(df_datos):
 
     Problema 6: Passengers > Seats (~560 registros en el dataset de práctica).
     Criterio ETL: se asume que el exceso puede deberse a cambio de asiento, revendedores,
-    etc., y se cap a capacidad declarada. Seats = 0 no se toca aquí (otra regla / módulo).
+    etc., y se corrige a capacidad declarada. Seats = 0 no se toca aquí (regla 14).
     """
     print("  > Aplicando Regla 6 (Passengers > Seats → Passengers := Seats)")
     df_clean = df_datos.copy()
@@ -84,20 +84,20 @@ def aplicar_regla_6_pasajeros_asientos(df_datos):
     n = int(mask.sum())
     if n:
         df_clean.loc[mask, "Passengers"] = seats[mask]
-    print(f"    - {n} registros ajustados (Passengers := Seats).")
+    print(f"    - {n} registros corregidos (Passengers := Seats).")
     return df_clean
 
 
 def aplicar_regla_7_distancia(df_datos):
     """
-    Si Distance es nula o <= 0, imputa con la distancia de otro registro del mismo
+    Si Distance es nula o <= 0, se obtiene la distancia de otro registro del mismo
     par (Origin, Dest) que tenga Distance > 0 (referencia por OD en el mismo lote).
 
-    Problema 7: Distance = 0 o negativa (~300 registros en el dataset de práctica).
-    Si no hay ningún pariente con distancia válida para ese OD, la fila se descarta.
+    Problema 7: Distance = 0 o negativa (~300 registros en el dataset).
+    Si no hay ningun regsitro con distancia válida para ese OD, la fila se descarta.
     """
     print(
-        "  > Aplicando Regla 7 (Distance inválida → imputar por mismo Origin–Dest)..."
+        "  > Aplicando Regla 7 (Distance inválida → recuperar por mismo Origin–Dest)..."
     )
     df_clean = df_datos.copy()
 
@@ -129,7 +129,7 @@ def aplicar_regla_7_distancia(df_datos):
     n_drop = int(still_bad.sum())
     df_out = merged.loc[~still_bad].copy()
 
-    print(f"    - {n_fill} registros con Distance imputada (mismo {COL_ORIGIN}–{COL_DEST}).")
+    print(f"    - {n_fill} registros corregidos (Distance obtenida por mismo {COL_ORIGIN}–{COL_DEST}).")
     print(f"    - {n_drop} registros eliminados (sin referencia OD con distancia > 0).")
     return df_out
 
