@@ -142,27 +142,48 @@ def aplicar_regla_2_normalizar_nombres(df):
 
 def aplicar_regla_3_airline_id(df):
     """
-    R03: Trata AirlineID inválido (0 o NULL) como carrier "Desconocido".
-    Reemplaza los identificadores por valores centinela homogéneos 
-    (0, 'UNK', 'DESCONOCIDO') para garantizar la integridad referencial en el DW.
+    R03: Infiriendo y estandarizando AirlineID nulos o en cero.
+    Intenta recuperar el AirlineID faltante basándose en el UniqueCarrier.
+    Si es imposible inferirlo, aplica los valores centinela (0, 'UNK', 'DESCONOCIDO').
     """
-    print("  > Aplicando R03: Estandarizando AirlineID nulos o en cero...")
+    print("  > Aplicando R03: Infiriendo y estandarizando AirlineID faltantes...")
     
-    # 1. Asegurar que la columna sea numérica y rellenar nulos con 0 para capturarlos en la máscara
+    # 1. Asegurar tipo numérico y capturar nulos como 0
     df['AirlineID'] = pd.to_numeric(df['AirlineID'], errors='coerce').fillna(0).astype(int)
     
-    # 2. Identificar registros afectados
-    mask_desconocido = df['AirlineID'] == 0
-    afectados_totales = mask_desconocido.sum()
+    mask_cero_inicial = df['AirlineID'] == 0
+    ceros_originales = mask_cero_inicial.sum()
     
-    # 3. Aplicar valores centinela definidos por el negocio
-    if afectados_totales > 0:
-        df.loc[mask_desconocido, 'AirlineID'] = 0
-        df.loc[mask_desconocido, 'UniqueCarrier'] = 'UNK'
-        df.loc[mask_desconocido, 'UniqueCarrierName'] = 'DESCONOCIDO'
+    if ceros_originales > 0:
+        # 2. Crear un diccionario de mapeo usando los registros VÁLIDOS (AirlineID > 0)
+        # Esto genera un mapa: {'OO': 20409, 'AA': 19386, ...}
+        df_validos = df[df['AirlineID'] > 0]
+        mapeo_id = df_validos.groupby('UniqueCarrier')['AirlineID'].first().to_dict()
         
-    print(f"    - {afectados_totales} registros marcados y homogeneizados como aerolínea 'DESCONOCIDA'.")
-    
+        # 3. Inferir los valores faltantes
+        # Buscamos el UniqueCarrier de los registros en 0 dentro de nuestro mapa
+        valores_inferidos = df.loc[mask_cero_inicial, 'UniqueCarrier'].map(mapeo_id)
+        
+        # Rellenamos: si encontró el ID lo pone, si map() devuelve NaN porque 
+        # la aerolínea nunca tuvo un ID válido, se mantiene en 0.
+        df.loc[mask_cero_inicial, 'AirlineID'] = valores_inferidos.fillna(0).astype(int)
+        
+        # 4. Calcular el éxito de la operación
+        mask_cero_final = df['AirlineID'] == 0
+        ceros_restantes = mask_cero_final.sum()
+        rescatados = ceros_originales - ceros_restantes
+        
+        print(f"    - Se lograron rescatar {rescatados} AirlineID(s) usando inferencia relacional.")
+        
+        # 5. Aplicar la regla de "Desconocido" SOLO a los casos irrecuperables
+        if ceros_restantes > 0:
+            df.loc[mask_cero_final, 'AirlineID'] = 0
+            df.loc[mask_cero_final, 'UniqueCarrier'] = 'UNK'
+            df.loc[mask_cero_final, 'UniqueCarrierName'] = 'DESCONOCIDO'
+            print(f"    - {ceros_restantes} registros irrecuperables marcados como 'DESCONOCIDO'.")
+    else:
+        print("    - No se encontraron registros con AirlineID faltante.")
+        
     return df
 
 def aplicar_regla_4_campos_obligatorios(df, engine):
@@ -532,71 +553,60 @@ def aplicar_regla_11_airportseq(df, engine):
 
     return df_clean
 
-def aplicar_regla_12_citymarket(df, engine):
+def aplicar_regla_12_citymarket(df):
     """
-    Corrige el CityMarketID utilizando la tabla l_city_market_id.
-    Si el ID está corrupto (es igual al AirportID), cruza con la tabla de lookup 
-    para recuperar la descripción de la ciudad y reasignar el mercado correcto.
+    R12: Corrige el CityMarketID corrupto (cuando es igual al AirportID).
+    Infiriendo el MarketID correcto a partir de otros registros históricos 
+    válidos del mismo aeropuerto dentro del dataset.
     """
-    print("  > Aplicando Regla 12 (Corrección Avanzada de CityMarketID)...")
-    df_clean = df.copy()
+    print("  > Aplicando R12: Corrigiendo CityMarketID corruptos...")
     
-    # 1. Cargar la tabla maestra de City Markets
-    query_cm = "SELECT Code, Description as CityName FROM stg_city_market_ids"
-    df_lookup_cm = pd.read_sql(query_cm, engine)
-    
-    # Aseguramos tipos consistentes para el merge
-    df_lookup_cm['Code'] = df_lookup_cm['Code'].astype(str)
-    df_clean['OriginCityMarketID'] = df_clean['OriginCityMarketID'].astype(str)
-    df_clean['DestCityMarketID'] = df_clean['DestCityMarketID'].astype(str)
-    
+    # 1. Asegurar tipos numéricos para evitar fallos al comparar
+    columnas_id = ['OriginAirportID', 'OriginCityMarketID', 'DestAirportID', 'DestCityMarketID']
+    for col in columnas_id:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # ==========================
     # CORRECCIÓN EN ORIGEN
     # ==========================
-    mask_orig = df_clean['OriginCityMarketID'] == df_clean['OriginAirportID'].astype(str)
-    afectados_orig = mask_orig.sum()
+    mask_orig_corrupto = df['OriginCityMarketID'] == df['OriginAirportID']
+    afectados_orig = mask_orig_corrupto.sum()
+    rescatados_orig = 0
     
     if afectados_orig > 0:
-        # Hacemos un merge izquierdo solo para las filas afectadas, usando el ID erróneo
-        # para buscar en la tabla de lookup
-        df_corregido_orig = pd.merge(
-            df_clean[mask_orig], 
-            df_lookup_cm, 
-            left_on='OriginCityMarketID', 
-            right_on='Code', 
-            how='left'
-        )
+        # A. Crear diccionario de aeropuertos "sanos" (donde el MarketID no está corrupto)
+        df_sanos_orig = df[~mask_orig_corrupto].dropna(subset=['OriginCityMarketID'])
+        mapa_mercado_orig = df_sanos_orig.groupby('OriginAirportID')['OriginCityMarketID'].first().to_dict()
         
-        # En una arquitectura completa, usaríamos el 'CityName' recuperado para volver a buscar 
-        # el ID correcto de los 30.000. Por simplicidad y eficiencia en Pandas, 
-        # actualizamos el nombre de la ciudad de origen directamente, asegurando que cuando
-        # se cruce con la dimensión Aeropuerto, la ciudad esté correcta.
-        # (Dependiendo de cómo esté estructurada tu dimensión final, podrías dejar el ID nulo
-        # si la ciudad ya está corregida).
-        df_clean.loc[mask_orig, 'OriginCityName'] = df_corregido_orig['CityName'].values
+        # B. Inferir los valores faltantes cruzando el AirportID contra el diccionario
+        valores_inferidos_orig = df.loc[mask_orig_corrupto, 'OriginAirportID'].map(mapa_mercado_orig)
         
-        # Opcional: Ahora sí neutralizamos el ID erróneo para que no cause problemas en las FKs futuras
-        df_clean.loc[mask_orig, 'OriginCityMarketID'] = None
+        # C. Reemplazar. Si no se pudo inferir (map devolvió NaN), mantenemos el valor original
+        df.loc[mask_orig_corrupto, 'OriginCityMarketID'] = valores_inferidos_orig.fillna(df['OriginCityMarketID'])
+        
+        # Calcular éxito
+        rescatados_orig = afectados_orig - (df['OriginCityMarketID'] == df['OriginAirportID']).sum()
 
     # ==========================
     # CORRECCIÓN EN DESTINO
     # ==========================
-    mask_dest = df_clean['DestCityMarketID'] == df_clean['DestAirportID'].astype(str)
-    afectados_dest = mask_dest.sum()
+    mask_dest_corrupto = df['DestCityMarketID'] == df['DestAirportID']
+    afectados_dest = mask_dest_corrupto.sum()
+    rescatados_dest = 0
     
     if afectados_dest > 0:
-        df_corregido_dest = pd.merge(
-            df_clean[mask_dest], 
-            df_lookup_cm, 
-            left_on='DestCityMarketID', 
-            right_on='Code', 
-            how='left'
-        )
-        df_clean.loc[mask_dest, 'DestCityName'] = df_corregido_dest['CityName'].values
-        df_clean.loc[mask_dest, 'DestCityMarketID'] = None
+        df_sanos_dest = df[~mask_dest_corrupto].dropna(subset=['DestCityMarketID'])
+        mapa_mercado_dest = df_sanos_dest.groupby('DestAirportID')['DestCityMarketID'].first().to_dict()
         
-    print(f"    - {afectados_orig + afectados_dest} registros geográficos corregidos usando tabla de lookup.")
-    return df_clean
+        valores_inferidos_dest = df.loc[mask_dest_corrupto, 'DestAirportID'].map(mapa_mercado_dest)
+        df.loc[mask_dest_corrupto, 'DestCityMarketID'] = valores_inferidos_dest.fillna(df['DestCityMarketID'])
+        
+        rescatados_dest = afectados_dest - (df['DestCityMarketID'] == df['DestAirportID']).sum()
+
+    print(f"    - Origen: Se corrigieron {rescatados_orig} de {afectados_orig} registros corruptos.")
+    print(f"    - Destino: Se corrigieron {rescatados_dest} de {afectados_dest} registros corruptos.")
+    
+    return df
 
 import pandas as pd
 
@@ -720,6 +730,66 @@ def aplicar_regla_16_carriers_expirados(df, engine):
         
     return df
 
+def aplicar_regla_17_unificar_identificadores_carrier(df):
+    """
+    R17: Unifica los campos UniqCarrierEntity, Carrier y CarrierName.
+    Sobrescribe estos campos redundantes utilizando UniqueCarrier como 
+    fuente única de verdad para asegurar consistencia.
+    """
+    print("  > Aplicando R17: Unificando identificadores redundantes de Transportista...")
+    
+    # Lista de campos que deben ser idénticos al código maestro
+    campos_redundantes = ['UniqCarrierEntity', 'Carrier', 'CarrierName']
+    
+    # Unificación: Sobrescribimos los campos con el valor de UniqueCarrier
+    for col in campos_redundantes:
+        df[col] = df['UniqueCarrier']
+
+    print(f"    - Se unificaron {len(df):,} registros garantizando que los 4 campos sean idénticos.")
+    
+    return df
+
+def aplicar_regla_18_inferir_carrier_region(df):
+    """
+    R18: Infiriendo y estandarizando CarrierRegion faltantes o nulos.
+    Intenta recuperar la región faltante basándose en el UniqueCarrier.
+    Si es imposible inferirlo, aplica el valor centinela 'Desconocido'.
+    """
+    print("  > Aplicando R18: Infiriendo y estandarizando CarrierRegion faltantes...")
+    
+    # 1. Estandarizar posibles strings 'NULL' o vacíos a verdaderos nulos de Pandas (NaN)
+    df['CarrierRegion'] = df['CarrierRegion'].replace(['NULL', 'null', 'None', '', ' '], np.nan)
+    
+    mask_nulos_inicial = df['CarrierRegion'].isna()
+    nulos_originales = mask_nulos_inicial.sum()
+    
+    if nulos_originales > 0:
+        # 2. Crear un diccionario de mapeo usando los registros VÁLIDOS
+        # Genera un mapa: {'BW': 'Latin America', 'AA': 'Domestic', ...}
+        df_validos = df.dropna(subset=['CarrierRegion'])
+        mapeo_region = df_validos.groupby('UniqueCarrier')['CarrierRegion'].first().to_dict()
+        
+        # 3. Inferir los valores faltantes
+        valores_inferidos = df.loc[mask_nulos_inicial, 'UniqueCarrier'].map(mapeo_region)
+        
+        # Rellenamos con los valores inferidos (los que no se encuentren seguirán siendo NaN)
+        df.loc[mask_nulos_inicial, 'CarrierRegion'] = valores_inferidos
+        
+        # 4. Calcular el éxito de la operación
+        mask_nulos_final = df['CarrierRegion'].isna()
+        nulos_restantes = mask_nulos_final.sum()
+        rescatados = nulos_originales - nulos_restantes
+        
+        print(f"    - Se lograron rescatar {rescatados} CarrierRegion(s) usando inferencia relacional.")
+        
+        # 5. Aplicar la regla de "Desconocido" SOLO a los casos irrecuperables
+        if nulos_restantes > 0:
+            df.loc[mask_nulos_final, 'CarrierRegion'] = 'Desconocido'
+            print(f"    - {nulos_restantes} registros irrecuperables marcados como 'Desconocido'.")
+    else:
+        print("    - No se encontraron registros con CarrierRegion faltante.")
+        
+    return df
 
 # =============================================================
 # 3. ORQUESTADOR PIPELINE Y PREPARACIÓN FINAL PARA DW
@@ -742,6 +812,7 @@ def ejecutar_pipeline_transformacion(df_crudo, engine):
     df = aplicar_regla_15_imputar_negativos(df)
 
     df = aplicar_regla_1_sufijos(df)
+    df = aplicar_regla_17_unificar_identificadores_carrier(df)
     df = aplicar_regla_2_normalizar_nombres(df)
     df = aplicar_regla_3_airline_id(df)
     df = aplicar_regla_4_campos_obligatorios(df, engine)
@@ -753,21 +824,39 @@ def ejecutar_pipeline_transformacion(df_crudo, engine):
     df = aplicar_regla_9_iata_reutilizado(df)
     
     df = aplicar_regla_11_airportseq(df, engine)
-    df = aplicar_regla_12_citymarket(df, engine)
+    df = aplicar_regla_12_citymarket(df)
     df = aplicar_regla_13_carga(df)
     
     df = aplicar_regla_14_flag_seats(df)
     df = aplicar_regla_16_carriers_expirados(df, engine)
+    df = aplicar_regla_18_inferir_carrier_region(df)
+    df = aplicar_regla_10_duplicados(df)
 
-    # --- PREPARACIÓN FINAL Y TIPADO PARA EL DATA WAREHOUSE ---
-    print("\n  > Aplicando Tipos de Datos (Casteo) para carga al DW...")
+# --- PREPARACIÓN FINAL Y TIPADO PARA EL DATA WAREHOUSE ---
+    print("\n  > Aplicando Tipos de Datos (Casteo) y calculando métricas finales...")
+        
+# 2. OcupPasajeros: (Passengers / Seats)
+    df['OcupPasajeros'] = np.where(df['Seats'] > 0, df['Passengers'] / df['Seats'], 0)
+    df['OcupPasajeros'] = df['OcupPasajeros'].fillna(0).round(4)
     
-    df['Capacidad'] = df['Payload'].astype(float).round(2)
-    df['Carga'] = df['Freight'].astype(float).round(2)
+    # 3. OcupCarga: (Freight / Payload)
+    df['OcupCarga'] = np.where(df['Payload'] > 0, df['Freight'] / df['Payload'], 0)
+    df['OcupCarga'] = df['OcupCarga'].fillna(0).round(4)
+
+    # 4. DemoraPista: (RampTime - AirTime)
+    df['DemoraPista'] = (df['RampTime'] - df['AirTime']).fillna(0)
+
+    # 4. Estacion: Calculada según el mes (Hemisferio Norte - USA) --> Para dimension Tiempo
+    # 1: Invierno, 2: Primavera, 3: Verano, 4: Otoño
+    condiciones_estacion = [
+        df['Month'].isin([12, 1, 2]),  # Invierno 
+        df['Month'].isin([3, 4, 5]),   # Primavera 
+        df['Month'].isin([6, 7, 8]),   # Verano
+        df['Month'].isin([9, 10, 11])  # Otoño
+    ]
+    valores_estacion = [1, 2, 3, 4]
     
-    # Cálculo Ocupación: (Pasajeros / Asientos) controlando división por cero
-    df['OcupacionPasajeros'] = np.where(df['Seats'] > 0, df['Passengers'] / df['Seats'], 0)
-    df['OcupacionPasajeros'] = df['OcupacionPasajeros'].astype(float).round(4)
+    df['Estacion'] = np.select(condiciones_estacion, valores_estacion, default=0)
     
     tiempo_total = time.time() - inicio
     print("\n" + "="*60)
@@ -785,8 +874,33 @@ if __name__ == "__main__":
     print("Conectando y extrayendo datos crudos desde stg_t100...")
     df_staging = pd.read_sql("SELECT * FROM stg_t100", engine_stg)
     
-    # Ejecutamos el pipeline completo
+    # 1. Ejecutamos el pipeline completo de transformación
     df_transformado_final = ejecutar_pipeline_transformacion(df_staging, engine_stg)
+
+    # 2. Persistencia en Staging para Auditoría
+    # Usamos un nombre que identifique que es el dato ya procesado
+    tabla_auditoria = "stg_t100_transformed"
     
-    # Aquí el DataFrame (df_transformado_final) ya está 100% limpio y tipado, 
-    # listo para enviarse al módulo de LOAD.
+    print(f"\n> Guardando resultados en {tabla_auditoria} para auditoría...")
+    inicio_carga = time.time()
+
+    try:
+        # Usamos if_exists='replace' para que en cada prueba se limpie la tabla
+        # fast_executemany=True (configurado en el engine) acelerará la carga notablemente
+        df_transformado_final.to_sql(
+            name=tabla_auditoria, 
+            con=engine_stg, 
+            if_exists='replace', 
+            index=False,
+            chunksize=10000 # Enviamos registros en lotes para optimizar memoria
+        )
+        
+        tiempo_carga = time.time() - inicio_carga
+        print(f"  [OK] Se cargaron {len(df_transformado_final):,} registros en {tiempo_carga:.2f}s")
+        print(f"  [!] Ya podés consultar los datos limpios en la tabla: {tabla_auditoria}")
+
+    except Exception as e:
+        print(f"  [ERROR] No se pudo persistir la tabla de auditoría: {e}")
+
+    # El DataFrame queda listo en memoria por si se requiere llamar al LOAD inmediatamente
+    print("\nProceso de transformación y persistencia finalizado.")
