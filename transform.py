@@ -759,15 +759,33 @@ def ejecutar_pipeline_transformacion(df_crudo, engine):
     df = aplicar_regla_14_flag_seats(df)
     df = aplicar_regla_16_carriers_expirados(df, engine)
 
-    # --- PREPARACIÓN FINAL Y TIPADO PARA EL DATA WAREHOUSE ---
-    print("\n  > Aplicando Tipos de Datos (Casteo) para carga al DW...")
+# --- PREPARACIÓN FINAL Y TIPADO PARA EL DATA WAREHOUSE ---
+    print("\n  > Aplicando Tipos de Datos (Casteo) y calculando métricas finales...")
+        
+    # 1. OcupPasajeros: (Pasajeros / Asientos) controlando división por cero
+    df['OcupPasajeros'] = np.where(df['Seats'] > 0, df['Passengers'] / df['Seats'], 0)
+    df['OcupPasajeros'] = df['OcupPasajeros'].astype(float).round(4)
     
-    df['Capacidad'] = df['Payload'].astype(float).round(2)
-    df['Carga'] = df['Freight'].astype(float).round(2)
+    # 2. OcupCarga: (Carga / Capacidad) controlando división por cero
+    df['OcupCarga'] = np.where(df['Capacidad'] > 0, df['Carga'] / df['Capacidad'], 0)
+    df['OcupCarga'] = df['OcupCarga'].astype(float).round(4)
+
+    # 3. DemoraPista: (RampTime - AirTime) en minutos
+    df['DemoraPista'] = df['RampTime'] - df['AirTime']
+    # Se castea a float para que SQL Server tolere correctamente los NaN en caso de tiempos nulos
+    df['DemoraPista'] = df['DemoraPista'].astype(float)
+
+    # 4. Estacion: Calculada según el mes (Hemisferio Norte - USA) --> Para dimension Tiempo
+    # 1: Invierno, 2: Primavera, 3: Verano, 4: Otoño
+    condiciones_estacion = [
+        df['Month'].isin([12, 1, 2]),  # Invierno 
+        df['Month'].isin([3, 4, 5]),   # Primavera 
+        df['Month'].isin([6, 7, 8]),   # Verano
+        df['Month'].isin([9, 10, 11])  # Otoño
+    ]
+    valores_estacion = [1, 2, 3, 4]
     
-    # Cálculo Ocupación: (Pasajeros / Asientos) controlando división por cero
-    df['OcupacionPasajeros'] = np.where(df['Seats'] > 0, df['Passengers'] / df['Seats'], 0)
-    df['OcupacionPasajeros'] = df['OcupacionPasajeros'].astype(float).round(4)
+    df['Estacion'] = np.select(condiciones_estacion, valores_estacion, default=0)
     
     tiempo_total = time.time() - inicio
     print("\n" + "="*60)
@@ -787,6 +805,5 @@ if __name__ == "__main__":
     
     # Ejecutamos el pipeline completo
     df_transformado_final = ejecutar_pipeline_transformacion(df_staging, engine_stg)
-    
     # Aquí el DataFrame (df_transformado_final) ya está 100% limpio y tipado, 
     # listo para enviarse al módulo de LOAD.
