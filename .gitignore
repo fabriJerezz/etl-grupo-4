@@ -1,4 +1,5 @@
 .venv
+.venv-arm
 .env
 
 # Claude Code (local user-specific permissions)
