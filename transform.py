@@ -802,7 +802,33 @@ if __name__ == "__main__":
     print("Conectando y extrayendo datos crudos desde stg_t100...")
     df_staging = pd.read_sql("SELECT * FROM stg_t100", engine_stg)
     
-    # Ejecutamos el pipeline completo
+    # 1. Ejecutamos el pipeline completo de transformación
     df_transformado_final = ejecutar_pipeline_transformacion(df_staging, engine_stg)
-    # Aquí el DataFrame (df_transformado_final) ya está 100% limpio y tipado, 
-    # listo para enviarse al módulo de LOAD.
+
+    # 2. Persistencia en Staging para Auditoría
+    # Usamos un nombre que identifique que es el dato ya procesado
+    tabla_auditoria = "stg_t100_transformed"
+    
+    print(f"\n> Guardando resultados en {tabla_auditoria} para auditoría...")
+    inicio_carga = time.time()
+
+    try:
+        # Usamos if_exists='replace' para que en cada prueba se limpie la tabla
+        # fast_executemany=True (configurado en el engine) acelerará la carga notablemente
+        df_transformado_final.to_sql(
+            name=tabla_auditoria, 
+            con=engine_stg, 
+            if_exists='replace', 
+            index=False,
+            chunksize=10000 # Enviamos registros en lotes para optimizar memoria
+        )
+        
+        tiempo_carga = time.time() - inicio_carga
+        print(f"  [OK] Se cargaron {len(df_transformado_final):,} registros en {tiempo_carga:.2f}s")
+        print(f"  [!] Ya podés consultar los datos limpios en la tabla: {tabla_auditoria}")
+
+    except Exception as e:
+        print(f"  [ERROR] No se pudo persistir la tabla de auditoría: {e}")
+
+    # El DataFrame queda listo en memoria por si se requiere llamar al LOAD inmediatamente
+    print("\nProceso de transformación y persistencia finalizado.")
