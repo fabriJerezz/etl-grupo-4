@@ -55,12 +55,14 @@ def carga_inicial_dw():
 
     # B. Dimensión Aeropuerto
     print("Cargando Dimensión Aeropuerto...")
-    orig = df[['Origin', 'OriginCityName']].rename(columns={'Origin': 'Nombre', 'OriginCityName': 'Ciudad'})
-    dest = df[['Dest', 'DestCityName']].rename(columns={'Dest': 'Nombre', 'DestCityName': 'Ciudad'})
+    orig = df[['Origin', 'OriginCityName', 'OriginCountryName']].rename(
+        columns={'Origin': 'Nombre', 'OriginCityName': 'Ciudad', 'OriginCountryName': 'Pais'}
+    )
+    dest = df[['Dest', 'DestCityName', 'DestCountryName']].rename(
+        columns={'Dest': 'Nombre', 'DestCityName': 'Ciudad', 'DestCountryName': 'Pais'}
+    )
     df_aero = pd.concat([orig, dest])
-    # FORZAMOS UNICIDAD SÓLO POR CÓDIGO IATA (Nombre)
     df_aero = df_aero.drop_duplicates(subset=['Nombre'], keep='first').copy()
-    df_aero['Pais'] = 'USA'
     df_aero['Fecha_Inicio'] = pd.Timestamp.now().date()
     df_aero['Fila_Activa'] = 1
     df_aero.to_sql('Aeropuerto', engine_dw, if_exists='append', index=False)
