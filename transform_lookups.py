@@ -6,10 +6,24 @@ Lee desde staging, aplica las reglas de calidad y retorna DataFrames limpios
 listos para la fase de carga (load.py).
 
 TABLAS TRATADAS:
-    stg_unique_carriers  — códigos y nombres de carriers
-    stg_carrier_history  — historial de carriers y fusiones
-    carrier_group_compact — tabla consolidada que unifica stg_carrier_group
-                            y stg_carrier_group_new en una sola referencia
+    stg_unique_carriers       — códigos y nombres de carriers
+    stg_carrier_history       — historial de carriers y fusiones
+    carrier_group_compact     — tabla consolidada que unifica stg_carrier_group
+                                y stg_carrier_group_new en una sola referencia
+    stg_aircraft_config       — configuración de aeronaves (pasillo simple/doble, etc.)
+    stg_aircraft_group        — grupo de aeronave (Jet, Prop, Hel)
+    stg_aircraft_type         — tipo de aeronave (737, A320, etc.)
+    stg_airline_ids           — IDs numéricos de aerolíneas (AirlineID)
+    stg_airport_ids           — IDs numéricos de aeropuertos
+    stg_airport_seq_ids       — IDs secuenciales de aeropuertos por período
+    stg_airports              — códigos IATA de aeropuertos
+    stg_city_market_ids       — IDs de mercados de ciudad (CityMarketID)
+    stg_distance_group        — grupos de distancia de vuelo
+    stg_months                — meses del año
+    stg_quarters              — trimestres del año
+    stg_service_class         — clase de servicio de vuelo
+    stg_unique_carrier_entities — entidades de carrier únicas
+    stg_world_area_codes      — códigos de área del mundo
 
 REQUISITOS:
     pip install pandas sqlalchemy pyodbc python-dotenv
@@ -299,6 +313,675 @@ def construir_carrier_group_compact() -> pd.DataFrame:
 
 
 # =============================================================
+# stg_aircraft_config
+# =============================================================
+
+def limpiar_aircraft_config(engine) -> pd.DataFrame:
+    """
+    Lee stg_aircraft_config y aplica las siguientes correcciones:
+
+    1. STRIP + UPPER en Code: normaliza mayúsculas y elimina espacios.
+    2. Elimina filas con Code nulo o vacío (entrada "Unknown" sin código válido).
+    3. Deduplica por Code conservando la primera aparición canónica.
+       Caso: TWIN aparece como "Twin aisle" y "Twin-aisle wide" → se conserva la primera.
+    """
+    print("  [stg_aircraft_config] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_aircraft_config",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip().str.upper()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Duplicados elim. : {n_dup:,}")
+    print(f"         Filas limpias    : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_aircraft_group
+# =============================================================
+
+def limpiar_aircraft_group(engine) -> pd.DataFrame:
+    """
+    Lee stg_aircraft_group y aplica las siguientes correcciones:
+
+    1. STRIP + UPPER en Code: normaliza "jet" → "JET" y elimina espacios.
+    2. Elimina filas con Code nulo o vacío (entrada "Not reported" sin código).
+    3. Deduplica por Code conservando la primera aparición canónica.
+       Caso: JET y jet son el mismo código tras normalizar → se conserva uno.
+    """
+    print("  [stg_aircraft_group] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_aircraft_group",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip().str.upper()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Dup. de case elim.: {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_aircraft_type
+# =============================================================
+
+def limpiar_aircraft_type(engine) -> pd.DataFrame:
+    """
+    Lee stg_aircraft_type y aplica las siguientes correcciones:
+
+    1. STRIP + UPPER en Code: normaliza mayúsculas y espacios.
+    2. Elimina filas con Code nulo o vacío.
+    3. Imputa descripciones vacías desde otra ocurrencia del mismo código.
+       Caso: DC9 no tiene descripción y no existe otra entrada de DC9 → queda como NA.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: 737 aparece como "Boeing 737 Classic" y "Boeing 737 (legacy code)"
+       → se conserva "Boeing 737 Classic".
+    """
+    print("  [stg_aircraft_type] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_aircraft_type",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip().str.upper()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    # Imputar descripciones vacías desde otra ocurrencia del mismo código
+    mapa_desc = (
+        df[df["Description"].notna()]
+        .drop_duplicates(subset="Code", keep="first")
+        .set_index("Code")["Description"]
+        .to_dict()
+    )
+    mask_sin_desc = df["Description"].isna()
+    n_sin_desc = int(mask_sin_desc.sum())
+    df.loc[mask_sin_desc, "Description"] = df.loc[mask_sin_desc, "Code"].map(mapa_desc)
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Sin desc. (NA)    : {n_sin_desc:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_airline_ids
+# =============================================================
+
+def limpiar_airline_ids(engine) -> pd.DataFrame:
+    """
+    Lee stg_airline_ids y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64): asegura comparaciones correctas.
+    2. Elimina filas con Code nulo.
+    3. Imputa descripciones vacías desde otra ocurrencia del mismo código.
+       Caso: 21171 (Sun Country) tiene una segunda entrada con descripción vacía.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Casos: 21171 (Sun Country / vacío), 20397 (Piedmont / AirTran),
+       19977 (United / Continental post-fusión) → se conserva la primera.
+
+    Nota: Code = 0 ("Unknown Carrier") se conserva como valor centinela.
+    """
+    print("  [stg_airline_ids] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_airline_ids",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    mapa_desc = (
+        df[df["Description"].notna()]
+        .drop_duplicates(subset="Code", keep="first")
+        .set_index("Code")["Description"]
+        .to_dict()
+    )
+    mask_sin_desc = df["Description"].isna()
+    n_imputadas = int(mask_sin_desc.sum())
+    df.loc[mask_sin_desc, "Description"] = df.loc[mask_sin_desc, "Code"].map(mapa_desc)
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Desc. imputadas   : {n_imputadas:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_airport_ids
+# =============================================================
+
+def limpiar_airport_ids(engine) -> pd.DataFrame:
+    """
+    Lee stg_airport_ids y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo.
+    3. Elimina códigos con descripción nula y fuera del rango válido de AirportIDs
+       del BTS (10000–19999). Detecta sentinelas inválidos como 99999 sin
+       depender de un valor hardcodeado.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: 11298 (O'Hare) aparece con dos nombres ligeramente distintos.
+
+    Nota: Code = 0 ("Unknown Airport") se conserva como valor centinela.
+    """
+    print("  [stg_airport_ids] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_airport_ids",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    # AirportIDs válidos del BTS: 10000–19999. Códigos con descripción nula
+    # y fuera de este rango son sentinelas inválidos (ej: 99999).
+    mask_invalido = df["Description"].isna() & (
+        (df["Code"] < 10000) | (df["Code"] > 19999)
+    ) & (df["Code"] != 0)
+    n_invalidos = int(mask_invalido.sum())
+    codigos_invalidos = [int(x) for x in sorted(df.loc[mask_invalido, "Code"].unique())]
+    df = df[~mask_invalido]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Inválidos elim.   : {n_invalidos:,}  {codigos_invalidos}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_airport_seq_ids
+# =============================================================
+
+def limpiar_airport_seq_ids(engine) -> pd.DataFrame:
+    """
+    Lee stg_airport_seq_ids y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo.
+    3. Elimina códigos cuyo formato no corresponde a un SeqID válido:
+       los SeqIDs del BTS son de 7 dígitos (≥ 1.000.000). Códigos menores
+       corresponden a AirportIDs cargados erróneamente en este campo
+       (ej: 10135 que es un AirportID, no un SeqID).
+    4. Elimina códigos con descripción nula que corresponden a sentinelas
+       inválidos (ej: 9999999).
+    5. Deduplica por Code conservando la primera aparición canónica.
+    """
+    print("  [stg_airport_seq_ids] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_airport_seq_ids",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    # SeqIDs válidos son de 7 dígitos (≥ 1.000.000)
+    mask_formato = df["Code"] < 1_000_000
+    n_formato = int(mask_formato.sum())
+    codigos_formato = [int(x) for x in sorted(df.loc[mask_formato, "Code"].unique())]
+    df = df[~mask_formato]
+
+    # Sentinelas inválidos: descripción nula
+    mask_sin_desc = df["Description"].isna()
+    n_sin_desc = int(mask_sin_desc.sum())
+    codigos_sin_desc = [int(x) for x in sorted(df.loc[mask_sin_desc, "Code"].unique())]
+    df = df[~mask_sin_desc]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Formato inv. elim.: {n_formato:,}  {codigos_formato}")
+    print(f"         Sin desc. elim.   : {n_sin_desc:,}  {codigos_sin_desc}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_airports
+# =============================================================
+
+def limpiar_airports(engine) -> pd.DataFrame:
+    """
+    Lee stg_airports y aplica las siguientes correcciones:
+
+    1. STRIP + UPPER en Code: normaliza mayúsculas y espacios.
+    2. Elimina filas con Code nulo o vacío (entrada "Unknown Airport" sin código IATA).
+    3. Imputa descripciones vacías desde otra ocurrencia del mismo código.
+       Caso: DAL no tiene descripción y no existe otra entrada → queda como NA.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: ORD aparece con dos nombres distintos → se conserva el primero.
+    """
+    print("  [stg_airports] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_airports",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip().str.upper()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    mapa_desc = (
+        df[df["Description"].notna()]
+        .drop_duplicates(subset="Code", keep="first")
+        .set_index("Code")["Description"]
+        .to_dict()
+    )
+    mask_sin_desc = df["Description"].isna()
+    n_imputadas = int(mask_sin_desc.sum())
+    df.loc[mask_sin_desc, "Description"] = df.loc[mask_sin_desc, "Code"].map(mapa_desc)
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Desc. imputadas   : {n_imputadas:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_city_market_ids
+# =============================================================
+
+def limpiar_city_market_ids(engine) -> pd.DataFrame:
+    """
+    Lee stg_city_market_ids y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo.
+    3. Elimina códigos fuera del rango válido de CityMarketIDs del BTS (30000–39999).
+       Detecta AirportIDs cargados en este campo (rango 10000–19999, ej: 10135, 11432)
+       y sentinelas inválidos (ej: 99000) sin depender de valores hardcodeados.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: 34819 aparece como "New York, NY" y "Newark, NJ" → se conserva el primero.
+    """
+    print("  [stg_city_market_ids] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_city_market_ids",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    ID_MIN, ID_MAX = 30000, 39999
+    mask_invalido = (df["Code"] < ID_MIN) | (df["Code"] > ID_MAX)
+    n_invalidos = int(mask_invalido.sum())
+    codigos_invalidos = [int(x) for x in sorted(df.loc[mask_invalido, "Code"].unique())]
+    df = df[~mask_invalido]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales   : {filas_orig:,}")
+    print(f"         Nulos elim. (Code) : {n_nulos:,}")
+    print(f"         IDs fuera de rango : {n_invalidos:,}  {codigos_invalidos}")
+    print(f"         Duplicados elim.   : {n_dup:,}")
+    print(f"         Filas limpias      : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_distance_group
+# =============================================================
+
+def limpiar_distance_group(engine) -> pd.DataFrame:
+    """
+    Lee stg_distance_group y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo o vacío ("Unknown Distance Group" sin código).
+    3. Deduplica por Code conservando la primera aparición canónica.
+       Caso: código 1 aparece como "Under 500 Miles" y "Less than 500 Miles"
+       → se conserva la primera descripción.
+
+    Nota: Code = 0 ("Distance not reported") se conserva como valor centinela.
+    """
+    print("  [stg_distance_group] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_distance_group",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_months
+# =============================================================
+
+def limpiar_months(engine) -> pd.DataFrame:
+    """
+    Lee stg_months y aplica las siguientes correcciones:
+
+    1. Detecta y elimina códigos no numéricos (JAN, FEB, etc.): el esquema
+       canónico del BTS usa enteros 0–12. Las variantes textuales son artefactos
+       de una carga mixta y duplican meses ya presentes con código numérico.
+    2. Convierte Code a numérico (Int64).
+    3. Deduplica por Code conservando la primera aparición canónica.
+
+    Nota: Code = 0 ("Month not reported") se conserva como valor centinela.
+    """
+    print("  [stg_months] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_months",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    # Detectar códigos no numéricos (JAN, FEB, etc.)
+    df["_code_num"] = pd.to_numeric(df["Code"], errors="coerce")
+    mask_texto = df["_code_num"].isna() & df["Code"].notna()
+    n_texto = int(mask_texto.sum())
+    codigos_texto = sorted(df.loc[mask_texto, "Code"].dropna().unique())
+    df = df[~mask_texto].copy()
+    df["Code"] = df["_code_num"].astype("Int64")
+    df = df.drop(columns=["_code_num"])
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales   : {filas_orig:,}")
+    print(f"         Códigos texto elim.: {n_texto:,}  {codigos_texto}")
+    print(f"         Nulos elim. (Code) : {n_nulos:,}")
+    print(f"         Duplicados elim.   : {n_dup:,}")
+    print(f"         Filas limpias      : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_quarters
+# =============================================================
+
+def limpiar_quarters(engine) -> pd.DataFrame:
+    """
+    Lee stg_quarters y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo.
+    3. Deduplica por Code conservando la primera aparición canónica.
+       Caso: códigos 1–4 aparecen dos veces: con descripciones completas
+       ("January-March") y con alias cortos ("Q1"). Se conservan las primeras.
+
+    Nota: Code = 0 ("Quarter not reported") se conserva como valor centinela.
+    """
+    print("  [stg_quarters] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_quarters",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_service_class
+# =============================================================
+
+def limpiar_service_class(engine) -> pd.DataFrame:
+    """
+    Lee stg_service_class y aplica las siguientes correcciones:
+
+    1. STRIP en Code.
+    2. Elimina filas con Code nulo o vacío (entrada "Unknown Service Class").
+    3. Elimina códigos numéricos (ej: "1"): el esquema del BTS usa exclusivamente
+       letras (F, G, L, P, Q, R, Z). Los códigos numéricos son artefactos de
+       una carga mixta con otro esquema de clasificación.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Casos: F y L aparecen con descripciones cortas y largas → se conservan
+       las más completas (primera aparición).
+    """
+    print("  [stg_service_class] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_service_class",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    mask_numerico = df["Code"].str.isnumeric()
+    n_numericos = int(mask_numerico.sum())
+    codigos_num = sorted(df.loc[mask_numerico, "Code"].unique())
+    df = df[~mask_numerico]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Numéricos elim.   : {n_numericos:,}  {codigos_num}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_unique_carrier_entities
+# =============================================================
+
+def limpiar_unique_carrier_entities(engine) -> pd.DataFrame:
+    """
+    Lee stg_unique_carrier_entities y aplica las siguientes correcciones:
+
+    1. STRIP + UPPER en Code: normaliza mayúsculas y espacios.
+    2. Elimina filas con Code nulo o vacío.
+    3. Imputa descripciones vacías desde otra ocurrencia del mismo código.
+       Caso: XX no tiene descripción en ninguna ocurrencia → queda como NA.
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: AA aparece con dos variantes de nombre → se conserva la primera.
+    """
+    print("  [stg_unique_carrier_entities] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_unique_carrier_entities",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = df["Code"].str.strip().str.upper()
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum() + (df["Code"] == "").sum())
+    df = df[df["Code"].notna() & (df["Code"] != "")]
+
+    mapa_desc = (
+        df[df["Description"].notna()]
+        .drop_duplicates(subset="Code", keep="first")
+        .set_index("Code")["Description"]
+        .to_dict()
+    )
+    mask_sin_desc = df["Description"].isna()
+    n_imputadas = int(mask_sin_desc.sum())
+    df.loc[mask_sin_desc, "Description"] = df.loc[mask_sin_desc, "Code"].map(mapa_desc)
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Desc. imputadas   : {n_imputadas:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
+# stg_world_area_codes
+# =============================================================
+
+def limpiar_world_area_codes(engine) -> pd.DataFrame:
+    """
+    Lee stg_world_area_codes y aplica las siguientes correcciones:
+
+    1. Convierte Code a numérico (Int64).
+    2. Elimina filas con Code nulo.
+    3. Elimina Code = 0: no tiene descripción asignada y no es un centinela
+       estándar del BTS para esta tabla (a diferencia de meses o trimestres).
+    4. Deduplica por Code conservando la primera aparición canónica.
+       Caso: código 9 ("Pacific") aparece también como "Pacific Region"
+       → se conserva la primera descripción.
+    """
+    print("  [stg_world_area_codes] Limpiando...")
+
+    df = pd.read_sql(
+        "SELECT Code, Description FROM dw_staging_raw.dbo.stg_world_area_codes",
+        engine,
+    )
+    filas_orig = len(df)
+
+    df["Code"] = pd.to_numeric(df["Code"], errors="coerce").astype("Int64")
+    df["Description"] = df["Description"].str.strip().replace("", pd.NA)
+
+    n_nulos = int(df["Code"].isna().sum())
+    df = df[df["Code"].notna()]
+
+    mask_cero = df["Code"] == 0
+    n_cero = int(mask_cero.sum())
+    df = df[~mask_cero]
+
+    n_antes = len(df)
+    df = df.drop_duplicates(subset="Code", keep="first").reset_index(drop=True)
+    n_dup = n_antes - len(df)
+
+    print(f"         Filas originales  : {filas_orig:,}")
+    print(f"         Nulos elim. (Code): {n_nulos:,}")
+    print(f"         Código 0 elim.    : {n_cero:,}")
+    print(f"         Duplicados elim.  : {n_dup:,}")
+    print(f"         Filas limpias     : {len(df):,}")
+    return df
+
+
+# =============================================================
 # FUNCIÓN PRINCIPAL
 # =============================================================
 
@@ -312,9 +995,23 @@ def limpiar_lookups(engine) -> dict[str, pd.DataFrame]:
     print("=" * 60)
 
     resultado = {}
-    resultado["unique_carriers"]      = limpiar_unique_carriers(engine)
-    resultado["carrier_history"]      = limpiar_carrier_history(engine)
-    resultado["carrier_group_compact"] = construir_carrier_group_compact()
+    resultado["unique_carriers"]           = limpiar_unique_carriers(engine)
+    resultado["carrier_history"]           = limpiar_carrier_history(engine)
+    resultado["carrier_group_compact"]     = construir_carrier_group_compact()
+    resultado["aircraft_config"]           = limpiar_aircraft_config(engine)
+    resultado["aircraft_group"]            = limpiar_aircraft_group(engine)
+    resultado["aircraft_type"]             = limpiar_aircraft_type(engine)
+    resultado["airline_ids"]               = limpiar_airline_ids(engine)
+    resultado["airport_ids"]               = limpiar_airport_ids(engine)
+    resultado["airport_seq_ids"]           = limpiar_airport_seq_ids(engine)
+    resultado["airports"]                  = limpiar_airports(engine)
+    resultado["city_market_ids"]           = limpiar_city_market_ids(engine)
+    resultado["distance_group"]            = limpiar_distance_group(engine)
+    resultado["months"]                    = limpiar_months(engine)
+    resultado["quarters"]                  = limpiar_quarters(engine)
+    resultado["service_class"]             = limpiar_service_class(engine)
+    resultado["unique_carrier_entities"]   = limpiar_unique_carrier_entities(engine)
+    resultado["world_area_codes"]          = limpiar_world_area_codes(engine)
 
     print(f"\n{'='*60}")
     print("TRANSFORM LOOKUPS COMPLETADO")
@@ -344,11 +1041,6 @@ if __name__ == "__main__":
 
     dfs = limpiar_lookups(engine)
 
-    print("Muestra unique_carriers limpio:")
-    print(dfs["unique_carriers"].to_string(index=False))
-
-    print("\nMuestra carrier_history limpio:")
-    print(dfs["carrier_history"].to_string(index=False))
-
-    print("\ncarrier_group_compact:")
-    print(dfs["carrier_group_compact"].to_string(index=False))
+    for nombre, df in dfs.items():
+        print(f"\nMuestra {nombre}:")
+        print(df.to_string(index=False))
