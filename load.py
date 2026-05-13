@@ -16,16 +16,11 @@ CONN_DW = CONN_STAGING.replace("dw_staging_raw", "dw_trafico_aereo")
 engine_stg = create_engine(CONN_STAGING)
 engine_dw = create_engine(CONN_DW, fast_executemany=True)
 
-def carga_inicial_dw():
+def carga_inicial_dw(df):
 
     inicio = time.time()
 
-    # --- PASO 1: Obtención de Datos Transformados ---
-    print("Iniciando extracción y transformación...")
-    df_stg = pd.read_sql("SELECT * FROM stg_t100", engine_stg)
-    df = ejecutar_pipeline_transformacion(df_stg, engine_stg)
-
-# --- PASO 2: Limpieza de la Instancia de Desarrollo (Truncate/Delete) ---
+# --- PASO 1: Limpieza de la Instancia de Desarrollo (Truncate/Delete) ---
     print("\nLimpiando tablas del Data Warehouse para carga inicial...")
     with engine_dw.begin() as conn:
         # 1. Borramos la tabla de hechos (hija)
@@ -41,7 +36,7 @@ def carga_inicial_dw():
         conn.execute(text("DBCC CHECKIDENT ('Transportista', RESEED, 0);"))
         conn.execute(text("DBCC CHECKIDENT ('Aeropuerto', RESEED, 0);"))
 
-    # --- PASO 3: Carga de Dimensiones ---
+    # --- PASO 2: Carga de Dimensiones ---
     
     # A. Dimensión Tiempo
     print("Cargando Dimensión Tiempo...")
@@ -78,7 +73,7 @@ def carga_inicial_dw():
     df_trans['CarrierGrupo'] = df_trans['CarrierGrupo'].astype(str)
     df_trans.to_sql('Transportista', engine_dw, if_exists='append', index=False)
 
-    # --- PASO 4: Mapeo de Surrogate Keys para Tabla de Hechos ---
+    # --- PASO 3: Mapeo de Surrogate Keys para Tabla de Hechos ---
     print("\nRecuperando llaves subrogadas y mapeando tabla de hechos...")
     
     # Traemos SÓLO las llaves y el identificador para evitar que otras columnas generen duplicidad
@@ -100,7 +95,7 @@ def carga_inicial_dw():
     df = df.merge(dim_aero, left_on='Dest', right_on='Nombre', how='left')
     df = df.rename(columns={'AeropuertoKey': 'AeropuertoDestinoKey'}).drop(columns=['Nombre'])
 
-# --- PASO 5: Carga de Tabla de Hechos (Vuelo) ---
+# --- PASO 4: Carga de Tabla de Hechos (Vuelo) ---
     print("Preparando inserción masiva en tabla Vuelo (Identity delegada a SQL Server)...")
     
     # 1. Seleccionar exactamente las columnas de hechos y claves foráneas
@@ -129,4 +124,6 @@ def carga_inicial_dw():
     print("="*60)
 
 if __name__ == "__main__":
-    carga_inicial_dw()
+    df_stg = pd.read_sql("SELECT * FROM stg_t100", engine_stg)
+    df = ejecutar_pipeline_transformacion(df_stg, engine_stg)
+    carga_inicial_dw(df)

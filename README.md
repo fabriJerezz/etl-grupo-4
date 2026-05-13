@@ -57,19 +57,23 @@ Notas:
 
 ## Preparar base de datos
 
-Ejecutar el script en utils/crear_staging.md desde SSMS. Crea la base
-dw_staging_raw y todas las tablas stg_ (re-ejecutable).
+- Ejecutar el script en utils/crear_staging.md desde SSMS. Crea la base dw_staging_raw y todas las tablas stg_ (re-ejecutable).
+- Ejecutar el script en utils/crear_dw.md desde SSMS. Crea la base w_trafico_aereo y las tablas del dw
 
 ## Ejecucion
 
 ```powershell
-python extract.py
+python main.py
 ```
+> Nota: Para fines de auditoría o pruebas, los módulos `extract.py`, `transform.py` y `load.py` conservan su capacidad de ejecutarse de manera aislada.
 
 ## Estado del proyecto
 
-- extract.py implementado.
-- load.py y transform.py pendientes.
+- [x] extract.py implementado.
+- [x] transform.py implementado.
+- [x] load.py implementado
+- [ ] Pendiente: Implementar SCD para el historial de las dimensiones del negocio.
+- [ ] Pendiente: Diseñar la estrategia y el código para la Carga Incremental de nuevos lotes de datos.
 
 ## Documentacion
 
