@@ -477,81 +477,63 @@ def aplicar_regla_10_duplicados(df):
 
 # --- MÓDULO 4: GEOGRAFÍA Y CARGA (Reglas 11 a 13) ---
 
-def aplicar_regla_11_airportseq(df, engine):
+def aplicar_regla_11_airportseq(df):
     """
-    Corrige el AirportSeqID utilizando la tabla l_airport_seq_id.
-    Compara de forma segura (numérica) para evitar fallos silenciosos de Pandas 
-    y asigna la versión histórica correcta basada en el año del vuelo.
+    R11: Corrige el AirportSeqID corrupto (cuando es igual al AirportID).
+    Infiere la versión histórica correcta del aeropuerto usando registros sanos 
+    del mismo dataset, agrupando por Aeropuerto y Año para mantener la precisión temporal.
     """
-    print("  > Aplicando Regla 11 (Corrección Histórica de AirportSeqID)...")
-    df_clean = df.copy()
+    print("  > Aplicando R11: Infiriendo y corrigiendo AirportSeqID temporalmente...")
     
-    # 1. Traer y preparar la tabla de lookup
-    query_seq = "SELECT Code, Description FROM stg_airport_seq_ids"
-    df_lookup = pd.read_sql(query_seq, engine)
-    
-    df_lookup['Code'] = df_lookup['Code'].astype(str).str.strip()
-    df_validos = df_lookup[df_lookup['Code'].str.len() == 7].copy()
-    df_validos['BaseAirportID'] = df_validos['Code'].str[:5]
-    
-    # 2. Separar mapeos temporales
-    mask_pre_2005 = df_validos['Description'].str.contains('pre-2005', case=False, na=False)
-    map_pre = dict(zip(df_validos.loc[mask_pre_2005, 'BaseAirportID'], df_validos.loc[mask_pre_2005, 'Code']))
-    map_post = dict(zip(df_validos.loc[~mask_pre_2005, 'BaseAirportID'], df_validos.loc[~mask_pre_2005, 'Code']))
-
-    # 3. Preparación segura de la tabla de hechos
-    # Forzamos Year a numérico para evaluar el período
-    df_clean['Year'] = pd.to_numeric(df_clean['Year'], errors='coerce')
-    
-    # Casteamos las columnas de destino a 'object' para permitir inyección de strings o nulos
-    df_clean['OriginAirportSeqID'] = df_clean['OriginAirportSeqID'].astype('object')
-    df_clean['DestAirportSeqID'] = df_clean['DestAirportSeqID'].astype('object')
-
+    # 1. Asegurar tipos numéricos para evitar errores de comparación silenciosos en Pandas
+    cols = ['OriginAirportID', 'OriginAirportSeqID', 'DestAirportID', 'DestAirportSeqID', 'Year']
+    for col in cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        
     # ==========================
     # CORRECCIÓN EN ORIGEN
     # ==========================
-    # Comparación segura convirtiendo a float (ignora los problemas de '.0' o strings mezclados)
-    mask_orig_err = (
-        pd.notna(df_clean['OriginAirportSeqID']) & 
-        pd.notna(df_clean['OriginAirportID']) & 
-        (df_clean['OriginAirportSeqID'].astype(float) == df_clean['OriginAirportID'].astype(float))
-    )
+    mask_orig = df['OriginAirportSeqID'] == df['OriginAirportID']
+    afectados_orig = mask_orig.sum()
+    rescatados_orig = 0
     
-    # Separar por períodos
-    mask_orig_pre = mask_orig_err & (df_clean['Year'] < 2005)
-    mask_orig_post = mask_orig_err & (df_clean['Year'] >= 2005)
-    
-    if mask_orig_err.sum() > 0:
-        # Extraemos el ID base LIMPIO (sin decimales) solo de los errores detectados
-        id_base_orig = df_clean.loc[mask_orig_err, 'OriginAirportID'].astype(float).astype(int).astype(str)
+    if afectados_orig > 0:
+        # A. Crear diccionario de aeropuertos "sanos". 
+        # Llave: Tupla (AirportID, Year) -> Valor: AirportSeqID correcto
+        df_sanos_orig = df[~mask_orig].dropna(subset=['OriginAirportSeqID'])
+        mapa_orig = df_sanos_orig.groupby(['OriginAirportID', 'Year'])['OriginAirportSeqID'].first().to_dict()
         
-        # Mapeamos e inyectamos. (Si un ID erróneo no tiene mapeo en el diccionario, Pandas pondrá NaN automáticamente, 
-        # lo cual cumple con nuestra regla de neutralizar si no hay data).
-        df_clean.loc[mask_orig_pre, 'OriginAirportSeqID'] = id_base_orig[mask_orig_pre].map(map_pre)
-        df_clean.loc[mask_orig_post, 'OriginAirportSeqID'] = id_base_orig[mask_orig_post].map(map_post)
+        # B. Armar tuplas de búsqueda para los registros corruptos
+        llaves_busqueda = list(zip(df.loc[mask_orig, 'OriginAirportID'], df.loc[mask_orig, 'Year']))
+        
+        # C. Inferir usando las tuplas contra el diccionario
+        valores_inferidos = pd.Series(llaves_busqueda, index=df[mask_orig].index).map(mapa_orig)
+        
+        # D. Reemplazar (si no se encuentra, mantiene el original para no inyectar nulos)
+        df.loc[mask_orig, 'OriginAirportSeqID'] = valores_inferidos.fillna(df['OriginAirportSeqID'])
+        rescatados_orig = afectados_orig - (df['OriginAirportSeqID'] == df['OriginAirportID']).sum()
 
     # ==========================
     # CORRECCIÓN EN DESTINO
     # ==========================
-    mask_dest_err = (
-        pd.notna(df_clean['DestAirportSeqID']) & 
-        pd.notna(df_clean['DestAirportID']) & 
-        (df_clean['DestAirportSeqID'].astype(float) == df_clean['DestAirportID'].astype(float))
-    )
+    mask_dest = df['DestAirportSeqID'] == df['DestAirportID']
+    afectados_dest = mask_dest.sum()
+    rescatados_dest = 0
     
-    mask_dest_pre = mask_dest_err & (df_clean['Year'] < 2005)
-    mask_dest_post = mask_dest_err & (df_clean['Year'] >= 2005)
-    
-    if mask_dest_err.sum() > 0:
-        id_base_dest = df_clean.loc[mask_dest_err, 'DestAirportID'].astype(float).astype(int).astype(str)
+    if afectados_dest > 0:
+        df_sanos_dest = df[~mask_dest].dropna(subset=['DestAirportSeqID'])
+        mapa_dest = df_sanos_dest.groupby(['DestAirportID', 'Year'])['DestAirportSeqID'].first().to_dict()
         
-        df_clean.loc[mask_dest_pre, 'DestAirportSeqID'] = id_base_dest[mask_dest_pre].map(map_pre)
-        df_clean.loc[mask_dest_post, 'DestAirportSeqID'] = id_base_dest[mask_dest_post].map(map_post)
+        llaves_busqueda_dest = list(zip(df.loc[mask_dest, 'DestAirportID'], df.loc[mask_dest, 'Year']))
+        valores_inferidos_dest = pd.Series(llaves_busqueda_dest, index=df[mask_dest].index).map(mapa_dest)
+        
+        df.loc[mask_dest, 'DestAirportSeqID'] = valores_inferidos_dest.fillna(df['DestAirportSeqID'])
+        rescatados_dest = afectados_dest - (df['DestAirportSeqID'] == df['DestAirportID']).sum()
+        
+    print(f"    - Origen: Se corrigieron {rescatados_orig} de {afectados_orig} registros corruptos.")
+    print(f"    - Destino: Se corrigieron {rescatados_dest} de {afectados_dest} registros corruptos.")
 
-    afectados = mask_orig_err.sum() + mask_dest_err.sum()
-    print(f"    - {afectados} IDs de secuencia temporal evaluados y corregidos mediante mapeo histórico.")
-
-    return df_clean
+    return df
 
 def aplicar_regla_12_citymarket(df):
     """
@@ -608,8 +590,6 @@ def aplicar_regla_12_citymarket(df):
     
     return df
 
-import pandas as pd
-
 def aplicar_regla_13_carga(df):
     """
     R13: Ajusta la carga (Freight) cuando supera la capacidad máxima (Payload).
@@ -642,7 +622,6 @@ def aplicar_regla_14_flag_seats(df):
     """
     R14: Evalúa la coherencia entre Pasajeros y Asientos.
     - Si Seats = 0 pero Passengers > 0 -> Crea un flag (Flag_Review_Seats = 1)
-    - Si Passengers > Seats (y Seats > 0) -> Descarta el registro.
     """
     print("  > Aplicando R14: Evaluando asientos nulos con pasajeros...")
     
@@ -658,15 +637,7 @@ def aplicar_regla_14_flag_seats(df):
     if mask_flag.sum() > 0:
         df.loc[mask_flag, 'Flag_Review_Seats'] = 1
         
-    # 3. Eliminar registros donde los pasajeros exceden la capacidad real (>0)
-    mask_delete = (df['Passengers'] > df['Seats']) & (df['Seats'] > 0)
-    n_eliminados = mask_delete.sum()
-    
-    if n_eliminados > 0:
-        df = df[~mask_delete]
-        
     print(f"    - {mask_flag.sum()} registros marcados con Flag_Review_Seats = 1 para auditoría.")
-    print(f"    - {n_eliminados} registros eliminados (Pasajeros > Asientos declarados).")
     
     return df
 
@@ -823,7 +794,7 @@ def ejecutar_pipeline_transformacion(df_crudo, engine):
     df = aplicar_regla_8_tiempos_vuelo(df)
     df = aplicar_regla_9_iata_reutilizado(df)
     
-    df = aplicar_regla_11_airportseq(df, engine)
+    df = aplicar_regla_11_airportseq(df)
     df = aplicar_regla_12_citymarket(df)
     df = aplicar_regla_13_carga(df)
     
