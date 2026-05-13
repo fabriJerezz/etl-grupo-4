@@ -174,7 +174,7 @@ def verificar_carga(engine):
 # EJECUCIÓN PRINCIPAL
 # =============================================================
 
-if __name__ == "__main__":
+def ejecutar_extraccion():
     print("=" * 60)
     print("ETL - CARGA DE STAGING AREA")
     print("=" * 60)
@@ -222,4 +222,11 @@ if __name__ == "__main__":
     print(f"  T100:    {filas_t100:,} filas")
     print(f"  Tiempo:  {elapsed_total:.1f}s")
     print(f"{'=' * 60}")
-j
+    
+    return True 
+
+# ==========================================
+# BLOQUE DE EJECUCIÓN AISLADA
+# ==========================================
+if __name__ == "__main__":
+    ejecutar_extraccion()

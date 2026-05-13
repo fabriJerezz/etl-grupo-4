@@ -57,19 +57,21 @@ Notas:
 
 ## Preparar base de datos
 
-Ejecutar el script en utils/crear_staging.md desde SSMS. Crea la base
-dw_staging_raw y todas las tablas stg_ (re-ejecutable).
+- Ejecutar el script en utils/crear_staging.md desde SSMS. Crea la base dw_staging_raw y todas las tablas - stg_ (re-ejecutable).
+Ejecutar el script en utils/crear_dw.md desde SSMS. Crea la base w_trafico_aereo y las tablas del dw
 
 ## Ejecucion
 
 ```powershell
-python extract.py
+python main.py
 ```
 
 ## Estado del proyecto
 
 - extract.py implementado.
-- load.py y transform.py pendientes.
+- transform.py implementado.
+- load.py implementado
+- controles SCD y carga incremental pendientes.
 
 ## Documentacion
 
